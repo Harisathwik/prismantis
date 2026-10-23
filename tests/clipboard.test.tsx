@@ -202,13 +202,14 @@ for (const key of ['copy0', 'html0']) for (const failure of ['unavailable', 'ref
   await ui.unmount()
 })
 
-test('the image helper gets each line as runs placed by terminal column, and the theme colors as RGB, on stdin', async () => {
-  const text = '┌────┐\n│ 苹果 │\n└────┘'
+test('the image helper gets each glyph at its terminal column, and the theme colors as RGB, on stdin', async () => {
+  const text = '┌──┬──┐\n│苹│ab│\n└──┴──┘'
   const mac = imageCommand('macos', text, { foreground: '#cdd6f4', background: '#1e1e2e' })!
   expect(mac.argv).toEqual(['/usr/bin/osascript', '-l', 'JavaScript', '-e', MAC_IMAGE_COPY])
+  const row = (s: string) => [...s].map((text, at) => ({ at, text }))
   expect(JSON.parse(mac.stdin)).toEqual({
-    lines: [[{ at: 0, text: '┌────┐' }], [{ at: 0, text: '│ ' }, { at: 2, text: '苹' }, { at: 4, text: '果' }, { at: 6, text: ' │' }], [{ at: 0, text: '└────┘' }]],
-    columns: 8,
+    lines: [row('┌──┬──┐'), [{ at: 0, text: '│' }, { at: 1, text: '苹' }, { at: 3, text: '│' }, { at: 4, text: 'a' }, { at: 5, text: 'b' }, { at: 6, text: '│' }], row('└──┴──┘')],
+    columns: 7,
     foreground: [205, 214, 244],
     background: [30, 30, 46],
   })
@@ -219,7 +220,13 @@ test('the image helper gets each line as runs placed by terminal column, and the
   expect(JSON.parse(imageCommand('macos', 'x', { foreground: 'cyan' })!.stdin)).toMatchObject({ foreground: [0, 0, 0], background: [255, 255, 255] })
   expect(JSON.parse(imageCommand('macos', 'x', { foreground: '#c9d4f2' })!.stdin)).toMatchObject({ foreground: [0, 0, 0], background: [255, 255, 255] })
   expect(JSON.parse(imageCommand('macos', 'x', { foreground: '#202020', background: '#1e1e2e' })!.stdin)).toMatchObject({ foreground: [255, 255, 255] })
-  expect(imageCommand('linux', text, {})).toBeNull()
+})
+
+test('the image helper gets right-to-left cell text in drawn order, each letter in its own column, borders kept in place', async () => {
+  const lines = JSON.parse(imageCommand('macos', '│ שלום │ 3 │\n│ Pears אגסים │', {}).stdin).lines
+  expect(lines[0]).toEqual([{ at: 0, text: '│' }, { at: 2, text: 'ם' }, { at: 3, text: 'ו' }, { at: 4, text: 'ל' }, { at: 5, text: 'ש' }, { at: 7, text: '│' }, { at: 9, text: '3' }, { at: 11, text: '│' }])
+  expect(lines[1].map((g: { text: string }) => g.text).join('')).toBe('│Pearsםיסגא│')
+  expect(lines[1].at(-1)).toEqual({ at: 14, text: '│' })
 })
 
 const figures = '| Item | Qty |\n|--|--:|\n| 苹果 | 3 |\n\n```mermaid\ngraph LR\nA[User] --> B[Gateway]\n```'
@@ -251,7 +258,10 @@ for (const surface of ['terminal', 'desktop'] as const) for (const [backend, set
   await ui.press({ key: 'png0' })
   expect(calls).toHaveLength(1)
   expect(calls[0]!.argv.at(-1)).toBe(setup.script)
-  expect(JSON.parse(calls[0]!.input).lines.map((runs: { text: string }[]) => runs.map(run => run.text).join('')).join('\n')).toBe(copies[0])
+  const drawn = JSON.parse(calls[0]!.input).lines.map((glyphs: { text: string }[]) => glyphs.map(g => g.text).join(''))
+  expect(copies[0]).toContain('```')
+  expect(drawn.join('\n')).not.toContain('`')
+  expect(drawn).toEqual(copies[0]!.split('\n').slice(1, -1).map(line => line.replace(/ /g, '')))
   await ui.press({ key: 'png1' })
   expect(JSON.parse(calls[1]!.input).lines.flat().map((run: { text: string }) => run.text).join('')).toContain('Gateway')
   expect(toasts).toEqual(['Copied', 'Copied as image', 'Copied as image'])

@@ -709,7 +709,7 @@ const tableSize = (block: Extract<Block, { kind: 'table' }>) => {
   return { natural: column(widestLine), words: column(longestWord) }
 }
 
-export const tableArt = (block: Extract<Block, { kind: 'table' }>): string => {
+const tableGrid = (block: Extract<Block, { kind: 'table' }>): string => {
   const cells = [block.header, ...block.rows].map(r => block.header.map((_, c) => displayText(r[c] ?? [])))
   const { natural, words } = tableSize(block)
   const widths = columnWidths(natural, ART_WIDTH - 4, 3, words)
@@ -725,8 +725,10 @@ export const tableArt = (block: Extract<Block, { kind: 'table' }>): string => {
       `│ ${lines.map((l, c) => pad(l[i] ?? '', c, header ? 'center' : block.align[c] ?? 'left')).join(' │ ')} │`)
   }
   const art = [line('┌', '┬', '┐'), ...row(cells[0]!, true), ...cells.slice(1).flatMap(r => [line('├', '┼', '┤'), ...row(r, false)]), line('└', '┴', '┘')]
-  return ['```', ...art, '```'].join('\n')
+  return art.join('\n')
 }
+
+export const tableArt = (block: Extract<Block, { kind: 'table' }>): string => ['```', tableGrid(block), '```'].join('\n')
 
 const clip = ({ Box }: ElementTable, w: number, drawn: RenderElement, key?: string) => (
   <Box key={key} flexDirection="column" minWidth={w}>
@@ -912,7 +914,7 @@ const leadInline = (blocks: Block[]): Inline[] => {
 }
 
 const renderNested = (el: ElementTable, style: Style, blocks: Block[], columns: number, key: string, copy?: CopyButton, fold?: Fold, tip?: Tip) =>
-  renderBlocks(el, style, blocks, columns, drawMath(el, style, blocks), copy && ((text, id, label, html, png) => copy(text, `${key}.${id}`, label, html, png)), fold && ((id, hidden, k) => fold(id, hidden, `${key}.${k}`)), tip)
+  renderBlocks(el, style, blocks, columns, drawMath(el, style, blocks), copy && ((text, id, label, html) => copy(text, `${key}.${id}`, label, html)), fold && ((id, hidden, k) => fold(id, hidden, `${key}.${k}`)), tip)
 
 const quoteBar = (el: ElementTable, text: string, color: string | undefined, lines: number) =>
   lines <= 1 ? <el.Text color={color}>{text}</el.Text> : clip(el, width(text), <el.Text color={color}>{Array.from({ length: lines }, () => text).join('\n')}</el.Text>)
@@ -1062,7 +1064,7 @@ const renderList = (el: ElementTable, style: Style, block: Extract<Block, { kind
   )
 }
 
-export type CopyButton = (text: string | (() => string), key: string, label?: string, html?: () => string, png?: boolean) => RenderElement | null
+export type CopyButton = (text: string | (() => string), key: string, label?: string, rich?: (() => string) | 'png') => RenderElement | null
 export type Drawn = Map<number, { element?: RenderElement; art?: string; note?: string }>
 export type FoldLook = { label?: string; face?: (folded: boolean) => RenderElement }
 export type Fold = (id: string, hidden: number, key: string, look?: FoldLook) => { folded: boolean; element: RenderElement; faced: boolean; around?: (rows: RenderElement, hover: TextHoverProps) => RenderElement } | null
@@ -1171,10 +1173,11 @@ export const renderBlocks = (el: ElementTable, style: Style, blocks: Block[], co
     const text = hover && holdsOnlyEmptyCode(block) ? undefined : copySource(style, block)
     const isPlainCode = block.kind === 'code' && !drawn.get(b)?.element
     const art = drawn.get(b)?.art ?? (block.kind === 'table' ? () => tableArt(block) : undefined)
+    const grid = drawn.get(b)?.art ?? (block.kind === 'table' ? () => tableGrid(block) : undefined)
     const first = text === undefined || isPlainCode ? null : copy?.(text, `copy${b}`, block.kind === 'table' ? '⧉ md' : art === undefined ? undefined : '⧉ source')
     const second = first && art !== undefined ? copy?.(art, `art${b}`, '⧉ art') : null
     const html = first && block.kind === 'table' ? copy?.(() => tableText(block), `html${b}`, '⧉ html', () => tableHtml(block)) : null
-    return { first, second, html, png: second && copy?.(art!, `png${b}`, '▣ png', undefined, true) }
+    return { first, second, html, png: second && copy?.(grid!, `png${b}`, '▣ png', 'png') }
   })
   const codeHead = (label: string, button: RenderElement | null) => {
     if (!hover || !button) return null

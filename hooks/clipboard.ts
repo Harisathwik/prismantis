@@ -1,5 +1,6 @@
 import { ratexColor } from './latex'
-import { graphemes, width } from './render'
+import { cells, width } from './render'
+import { holdVisual } from './rtl'
 
 export const MAC_TABLE_COPY = `
 ObjC.import('AppKit')
@@ -61,8 +62,10 @@ var attributes = $.NSMutableDictionary.dictionary
 attributes.setObjectForKey(font, $.NSFontAttributeName)
 attributes.setObjectForKey(rgb(payload.foreground), $.NSForegroundColorAttributeName)
 var pad = 16
-var cell = $('M').sizeWithAttributes(attributes).width
+var cell = Math.round($('M').sizeWithAttributes(attributes).width * 2) / 2
 var line = Math.ceil(font.ascender - font.descender + font.leading)
+var baseline = (line - font.ascender + font.descender) / 2 - font.descender
+var block = $('█').boundingRectWithSizeOptionsAttributes($.NSMakeSize(1000, 1000), 8, attributes)
 var width = 2 * pad + Math.ceil(cell * payload.columns)
 var height = 2 * pad + line * payload.lines.length
 var bitmap = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(null, width * 2, height * 2, 8, 4, true, false, $.NSDeviceRGBColorSpace, 0, 0)
@@ -72,8 +75,21 @@ $.NSGraphicsContext.saveGraphicsState
 $.NSGraphicsContext.setCurrentContext($.NSGraphicsContext.graphicsContextWithBitmapImageRep(bitmap))
 rgb(payload.background).setFill
 $.NSRectFill($.NSMakeRect(0, 0, width, height))
-payload.lines.forEach(function (runs, i) {
-  runs.forEach(function (run) { $(run.text).drawAtPointWithAttributes($.NSMakePoint(pad + run.at * cell, height - pad - (i + 1) * line), attributes) })
+payload.lines.forEach(function (glyphs, i) {
+  var bottom = height - pad - (i + 1) * line
+  glyphs.forEach(function (g) {
+    var x = pad + g.at * cell
+    if (!/^[─-▟]$/.test(g.text)) return $(g.text).drawWithRectOptionsAttributes($.NSMakeRect(x, bottom + baseline, 1000, 1000), 0, attributes)
+    $.NSGraphicsContext.saveGraphicsState
+    $.NSRectClip($.NSMakeRect(x, bottom, cell, line))
+    var fit = $.NSAffineTransform.transform
+    fit.translateXByYBy(x, bottom)
+    fit.scaleXByYBy(cell / block.size.width, line / block.size.height)
+    fit.translateXByYBy(-block.origin.x, -block.origin.y)
+    fit.concat
+    $(g.text).drawWithRectOptionsAttributes($.NSMakeRect(0, 0, 1000, 1000), 0, attributes)
+    $.NSGraphicsContext.restoreGraphicsState
+  })
 })
 $.NSGraphicsContext.restoreGraphicsState
 var png = bitmap.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $.NSDictionary.dictionary)
@@ -93,18 +109,39 @@ try {
   $payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
   $fg = [System.Drawing.Color]::FromArgb($payload.foreground[0], $payload.foreground[1], $payload.foreground[2])
   $bg = [System.Drawing.Color]::FromArgb($payload.background[0], $payload.background[1], $payload.background[2])
-  $font = New-Object System.Drawing.Font('Consolas', 14, [System.Drawing.GraphicsUnit]::Pixel)
+  $font = New-Object System.Drawing.Font('Consolas', 28, [System.Drawing.GraphicsUnit]::Pixel)
   $flags = [System.Windows.Forms.TextFormatFlags]::NoPadding -bor [System.Windows.Forms.TextFormatFlags]::NoPrefix -bor [System.Windows.Forms.TextFormatFlags]::SingleLine
-  $cell = [System.Windows.Forms.TextRenderer]::MeasureText('MMMMMMMMMM', $font, (New-Object System.Drawing.Size(0, 0)), $flags).Width / 10
+  $cell = [Math]::Round([System.Windows.Forms.TextRenderer]::MeasureText('MMMMMMMMMM', $font, (New-Object System.Drawing.Size(0, 0)), $flags).Width / 10)
   $line = $font.Height
-  $pad = 16
-  $bitmap = New-Object System.Drawing.Bitmap([int][Math]::Ceiling(2 * $pad + $cell * $payload.columns), [int](2 * $pad + $line * $payload.lines.Count))
+  $pad = 32
+  $origin = New-Object System.Drawing.PointF(0, 0)
+  $typographic = [System.Drawing.StringFormat]::GenericTypographic
+  $probe = New-Object System.Drawing.Drawing2D.GraphicsPath
+  $probe.AddString([string][char]0x2588, $font.FontFamily, 0, $font.Size, $origin, $typographic)
+  $block = $probe.GetBounds()
+  $brush = New-Object System.Drawing.SolidBrush($fg)
+  $bitmap = New-Object System.Drawing.Bitmap([int](2 * $pad + $cell * $payload.columns), [int](2 * $pad + $line * $payload.lines.Count))
+  $bitmap.SetResolution(192, 192)
   $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
   $graphics.Clear($bg)
   for ($i = 0; $i -lt $payload.lines.Count; $i++) {
-    foreach ($run in $payload.lines[$i]) {
-      $at = New-Object System.Drawing.Point([int]($pad + $run.at * $cell), [int]($pad + $i * $line))
-      [System.Windows.Forms.TextRenderer]::DrawText($graphics, [string]$run.text, $font, $at, $fg, $bg, $flags)
+    foreach ($g in $payload.lines[$i]) {
+      $x = $pad + $g.at * $cell
+      $y = $pad + $i * $line
+      if ($g.text -notmatch '^[\u2500-\u259f]$') {
+        [System.Windows.Forms.TextRenderer]::DrawText($graphics, [string]$g.text, $font, (New-Object System.Drawing.Point($x, $y)), $fg, $bg, $flags)
+        continue
+      }
+      $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+      $path.AddString([string]$g.text, $font.FontFamily, 0, $font.Size, $origin, $typographic)
+      $fit = New-Object System.Drawing.Drawing2D.Matrix
+      $fit.Translate($x, $y)
+      $fit.Scale($cell / $block.Width, $line / $block.Height)
+      $fit.Translate(-$block.X, -$block.Y)
+      $path.Transform($fit)
+      $graphics.SetClip((New-Object System.Drawing.Rectangle($x, $y, $cell, $line)))
+      $graphics.FillPath($brush, $path)
+      $graphics.ResetClip()
     }
   }
   $graphics.Dispose()
@@ -150,27 +187,15 @@ const rgbOf = (color: string | undefined, fallback: number[]): number[] => {
   return /^#[0-9a-f]{6}$/i.test(hex) ? [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)) : fallback
 }
 
-export const imageLines = (text: string): { at: number; text: string }[][] => text.split('\n').map(line => {
-  const runs: { at: number; text: string }[] = []
-  let at = 0
-  let open = false
-  for (const g of graphemes(line)) {
-    const w = width(g)
-    if (open && w < 2) runs.at(-1)!.text += g
-    else runs.push({ at, text: g })
-    open = w < 2
-    at += w
-  }
-  return runs
-})
+export const imageLines = (text: string): { at: number; text: string }[][] =>
+  text.split('\n').map(line => holdVisual(cells(line)).cells.flatMap((g, at) => (g.trim() ? [{ at, text: g }] : [])))
 
 const luma = ([r, g, b]: number[]): number => (0.299 * r! + 0.587 * g! + 0.114 * b!) / 255
 
 const readable = (foreground: number[], background: number[]): number[] =>
   Math.abs(luma(foreground) - luma(background)) >= 0.4 ? foreground : luma(background) > 0.5 ? [0, 0, 0] : [255, 255, 255]
 
-export const imageCommand = (backend: ClipboardBackend, text: string, colors: { foreground?: string; background?: string }, systemRoot?: string): HelperCommand | null => {
-  if (!drawsImages(backend)) return null
+export const imageCommand = (backend: ClipboardBackend, text: string, colors: { foreground?: string; background?: string }, systemRoot?: string): HelperCommand => {
   const lines = imageLines(text)
   const background = rgbOf(colors.background, [255, 255, 255])
   const json = JSON.stringify({ lines, columns: Math.max(0, ...text.split('\n').map(width)), foreground: readable(rgbOf(colors.foreground, [0, 0, 0]), background), background })

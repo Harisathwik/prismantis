@@ -56,3 +56,22 @@ const [wide, high, ...corner] = drawn.stdout.trim().split(',').map(Number)
 assert.ok(wide > 2 * 8 * 8 && high > 2 * 3 * 14, `image is ${wide}x${high}`)
 assert.deepEqual(corner, [30, 30, 46])
 console.log(`Native image helper writes a ${wide}x${high} PNG in the theme background`)
+
+const gaps = `
+var rep = $.NSBitmapImageRep.imageRepWithData(stored)
+var lit = function (x, y) { return rep.colorAtXY(x, y).redComponent > 0.5 }
+var missing = [0, 1].map(function (c) {
+  var count = 0
+  for (var y = 2 * pad; y < 2 * (height - pad); y++) {
+    var any = false
+    for (var x = Math.ceil(2 * (pad + c * cell)); x < Math.floor(2 * (pad + (c + 1) * cell)); x++) if (lit(x, y)) { any = true; break }
+    if (!any) count++
+  }
+  return count
+})
+missing.join(',')
+`
+const blocks = spawnSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', imageBridge + imageHelper + gaps], { input: imageCommand('macos', '█│\n█│\n█│', { foreground: '#cdd6f4', background: '#1e1e2e' }).stdin, encoding: 'utf8', timeout: 5000 })
+assert.equal(blocks.status, 0, blocks.stderr || blocks.error?.message)
+assert.equal(blocks.stdout.trim(), '0,0', `pixel rows without █ or │ ink: ${blocks.stdout.trim()}`)
+console.log('Stacked █ and │ glyphs touch from row to row in the PNG')
